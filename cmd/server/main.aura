@@ -1,0 +1,74 @@
+// ==============================================================================
+// Microservicio de Gestión y Cobro de Órdenes (Hexagonal Architecture in Aura)
+// ==============================================================================
+// Composition Root (Punto de Entrada del Microservicio - Estilo Golang)
+// ==============================================================================
+
+import { NewOrderService } from "../../internal/core/services/order_service";
+import { NewInMemoryOrderRepository } from "../../internal/adapters/outbound/persistence/inmemory_repo";
+import { NewStripePaymentGateway } from "../../internal/adapters/outbound/payment/stripe_gateway";
+import { NewAsyncEventBus } from "../../internal/adapters/outbound/messaging/async_event_bus";
+import { NewEmailNotifier } from "../../internal/adapters/outbound/notification/email_notifier";
+import { NewPrometheusMetricsAdapter } from "../../internal/adapters/outbound/telemetry/prometheus_metrics";
+import { NewOrderHttpHandler } from "../../internal/adapters/inbound/http/handler";
+import { RegisterMiddleware } from "../../internal/adapters/inbound/http/middleware";
+import { RegisterRoutes } from "../../internal/adapters/inbound/http/router";
+import { NewCliRunner } from "../../internal/adapters/inbound/cli/cli_runner";
+
+export fn main(): Unit => {
+  println("================================================================================");
+  println("  🔷 MICROSERVICIO HEXAGONAL EN AURA LANG (GOLANG IDIOMATIC MODEL)");
+  println("================================================================================");
+
+  // 1. Instanciación de Adaptadores Secundarios / Outbound (Driven Adapters)
+  println("[BOOTSTRAP] 1. Inicializando Adaptadores de Infraestructura Externa (Outbound)...");
+  let repo = NewInMemoryOrderRepository();
+  let paymentGateway = NewStripePaymentGateway("sk_live_aura_secret_key_9988", "production-us");
+  let eventBus = NewAsyncEventBus("broker-aura-kafka-01");
+  let emailNotifier = NewEmailNotifier("billing@aura-cloud.internal", "smtp.aura-cloud.internal:587");
+  let metricsCollector = NewPrometheusMetricsAdapter("aura_order_service");
+
+  // 2. Inyección de Dependencias Pura (Composition Root) hacia el Núcleo de Dominio
+  println("[BOOTSTRAP] 2. Inyectando Adaptadores Outbound en Core Service (OrderService)...");
+  let orderService = NewOrderService(repo, paymentGateway, eventBus, emailNotifier, metricsCollector);
+
+  // 3. Instanciación de Adaptadores Primarios / Inbound (Driving Adapters)
+  println("[BOOTSTRAP] 3. Inicializando Adaptadores Inbound (HTTP REST Handler & CLI Runner)...");
+  let httpHandler = NewOrderHttpHandler(orderService);
+  let cliRunner = NewCliRunner(orderService);
+
+  // 4. Ejecución del Flujo de Demostración Inicial (CLI Runner)
+  cliRunner.RunDemoWorkflow();
+
+  // 5. Configuración del Servidor HTTP y Registro de Rutas REST
+  let port = if (os.env("PORT") != "") {
+    os.env("PORT")
+  }else {
+    "8080"
+  };
+
+  let mux = http.newServeMux();
+
+  // Middleware global (CORS, Logging, Buffering)
+  RegisterMiddleware(mux);
+
+  // Rutas REST
+  RegisterRoutes(mux, httpHandler);
+
+  println("--------------------------------------------------------------------------------");
+  println("  🌐 SERVIDOR HTTP REST INICIADO EXITOSAMENTE");
+  println(`  • URL Base:             http://localhost:${port}`);
+  println(`  • Health Check:         http://localhost:${port}/health`);
+  println(`  • Métricas:             http://localhost:${port}/metrics`);
+  println(`  • Listar Órdenes:       http://localhost:${port}/api/v1/orders`);
+  println(`  • Crear Orden (POST):   http://localhost:${port}/api/v1/orders`);
+  println("--------------------------------------------------------------------------------");
+  println("  💡 Ejemplos de llamadas con cURL:");
+  println(`     curl -s http://localhost:${port}/health`);
+  println(`     curl -s http://localhost:${port}/metrics`);
+  println(`     curl -s -X POST http://localhost:${port}/api/v1/orders -H "Content-Type: application/json" -d '{"customerId":"cust-300","customerName":"Grace Hopper","customerEmail":"grace@navy.mil"}'`);
+  println("================================================================================");
+  println("  [Microservicio ejecutándose en segundo plano - Listo para recibir peticiones]\n");
+
+  let _ = mux.listenAndServe(":" + port);
+};

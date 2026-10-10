@@ -1,0 +1,160 @@
+// ==============================================================================
+// Domain Layer: Pure Business Models & Aggregates (Estilo Golang)
+// ==============================================================================
+
+import { ErrInvalidOrder, ErrEmptyOrderItems } from "./errors";
+
+// Funciones de Estado de la Orden (Idem Golang Enums / Type Constants)
+export fn STATUS_PENDING(): String => "PENDING";
+export fn STATUS_CONFIRMED(): String => "CONFIRMED";
+export fn STATUS_PAID(): String => "PAID";
+export fn STATUS_SHIPPED(): String => "SHIPPED";
+export fn STATUS_CANCELLED(): String => "CANCELLED";
+
+// 1. Value Object: Item de la Orden
+export struct OrderItem {
+  productId: String,
+  title: String,
+  quantity: Int,
+  unitPrice: Float,
+  subtotal: Float
+};
+
+export fn CalcSubtotal(price: Float, qty: Int): Float => {
+  let mut total: Float = 0.0;
+  let mut i = 0;
+  while i < qty {
+    total = total + price;
+    i = i + 1;
+  }
+  total
+};
+
+export fn NewOrderItem(productId: String, title: String, quantity: Int, unitPrice: Float): Result<OrderItem, String> => {
+  if (productId == "") {
+    return Err("El productId es obligatorio");
+  }
+  if (quantity <= 0) {
+    return Err("La cantidad debe ser mayor a 0");
+  }
+  if (unitPrice < 0.0) {
+    return Err("El precio unitario no puede ser negativo");
+  }
+
+  let subtotal = CalcSubtotal(unitPrice, quantity);
+  return Ok({
+    productId: productId,
+    title: title,
+    quantity: quantity,
+    unitPrice: unitPrice,
+    subtotal: subtotal
+  });
+};
+
+// 2. Value Object: Datos del Cliente
+export struct Customer {
+  customerId: String,
+  name: String,
+  email: String,
+  shippingAddress: String
+};
+
+export fn NewCustomer(customerId: String, name: String, email: String, address: String): Result<Customer, String> => {
+  if (customerId == "") {
+    return Err("El customerId es obligatorio");
+  }
+  if (name == "") {
+    return Err("El nombre del cliente es obligatorio");
+  }
+  if (email == "") {
+    return Err("El correo del cliente es obligatorio");
+  }
+  return Ok({
+    customerId: customerId,
+    name: name,
+    email: email,
+    shippingAddress: address
+  });
+};
+
+// 3. Aggregate Root: Order
+export struct Order {
+  id: String,
+  customer: Customer,
+  items: []OrderItem,
+  status: String,
+  totalAmount: Float,
+  currency: String,
+  paymentRef: String,
+  cancelReason: String,
+  createdAtMs: Int,
+  updatedAtMs: Int
+};
+
+// Constructor de Dominio para Order
+export fn NewOrder(
+  id: String,
+  customer: Customer,
+  items: []OrderItem,
+  currency: String,
+  timestampMs: Int
+): Result<Order, String> => {
+  if (id == "") {
+    return Err(ErrInvalidOrder("El ID de la orden no puede estar vacío"));
+  }
+  if (len(items) == 0) {
+    return Err(ErrEmptyOrderItems());
+  }
+
+  let mut total: Float = 0.0;
+  for item in items {
+    total = total + item.subtotal;
+  }
+
+  let curr = if (currency != "") { currency } else { "USD" };
+
+  return Ok({
+    id: id,
+    customer: customer,
+    items: items,
+    status: STATUS_PENDING(),
+    totalAmount: total,
+    currency: curr,
+    paymentRef: "",
+    cancelReason: "",
+    createdAtMs: timestampMs,
+    updatedAtMs: timestampMs
+  });
+};
+
+// Validador de transiciones de la máquina de estados de negocio
+export fn CanTransitionTo(currentStatus: String, nextStatus: String): Bool => {
+  if (currentStatus == STATUS_PENDING()) {
+    return nextStatus == STATUS_CONFIRMED() || nextStatus == STATUS_CANCELLED();
+  }
+  if (currentStatus == STATUS_CONFIRMED()) {
+    return nextStatus == STATUS_PAID() || nextStatus == STATUS_CANCELLED();
+  }
+  if (currentStatus == STATUS_PAID()) {
+    return nextStatus == STATUS_SHIPPED() || nextStatus == STATUS_CANCELLED();
+  }
+  // Estados finales: SHIPPED y CANCELLED
+  return false;
+};
+
+// Receiver Methods estilo Go para el agregado Order
+fn (o: Order) IsCompleted(): Bool => {
+  o.status == STATUS_SHIPPED()
+};
+
+fn (o: Order) IsCancelled(): Bool => {
+  o.status == STATUS_CANCELLED()
+};
+
+fn (o: Order) ItemCount(): Int => {
+  let mut total = 0;
+  for it in o.items {
+    total = total + it.quantity;
+  }
+  total
+};

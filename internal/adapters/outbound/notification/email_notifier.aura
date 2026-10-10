@@ -1,0 +1,56 @@
+// ==============================================================================
+// Outbound Adapter: Transactional Email Notification Adapter (Estilo Golang)
+// ==============================================================================
+
+import { NotificationPort } from "../../../core/ports/outbound";
+
+export struct EmailNotifier {
+  __aura_type: String,
+  senderAddress: String,
+  smtpHost: String,
+  mu: Mutex,
+  sentCounter: Int
+};
+
+export fn NewEmailNotifier(sender: String, host: String): EmailNotifier => {
+  return {
+    __aura_type: "EmailNotifier",
+    senderAddress: sender,
+    smtpHost: host,
+    mu: Mutex.new(),
+    sentCounter: 0
+  };
+};
+
+fn (n: EmailNotifier) SendOrderCreatedNotification(customerEmail: String, orderId: String, total: Float): Result<Unit, String> => {
+  n.mu.lock();
+  defer n.mu.unlock();
+  n.sentCounter = n.sentCounter + 1;
+
+  println(`    ✉️ [EmailNotifier @ ${n.smtpHost}] Enviado correo a <${customerEmail}>: "¡Orden ${orderId} recibida! Monto: $${total}"`);
+  Ok(())
+};
+
+fn (n: EmailNotifier) SendPaymentSuccessNotification(customerEmail: String, orderId: String, paymentRef: String): Result<Unit, String> => {
+  n.mu.lock();
+  defer n.mu.unlock();
+  n.sentCounter = n.sentCounter + 1;
+
+  println(`    ✉️ [EmailNotifier @ ${n.smtpHost}] Enviado correo a <${customerEmail}>: "¡Pago confirmado para Orden ${orderId}! Ref: ${paymentRef}"`);
+  Ok(())
+};
+
+fn (n: EmailNotifier) SendOrderCancelledNotification(customerEmail: String, orderId: String, reason: String): Result<Unit, String> => {
+  n.mu.lock();
+  defer n.mu.unlock();
+  n.sentCounter = n.sentCounter + 1;
+
+  println(`    ✉️ [EmailNotifier @ ${n.smtpHost}] Enviado correo a <${customerEmail}>: "Orden ${orderId} cancelada. Motivo: ${reason}"`);
+  Ok(())
+};
+
+fn (n: EmailNotifier) GetSentCount(): Int => {
+  n.mu.lock();
+  defer n.mu.unlock();
+  n.sentCounter
+};

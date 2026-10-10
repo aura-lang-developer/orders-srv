@@ -1,0 +1,39 @@
+// ==============================================================================
+// Ports Layer: Outbound / Driven Ports (Interfaces de Infraestructura Externa)
+// ==============================================================================
+
+import { Order } from "../domain/order";
+import { DomainEvent } from "../domain/events";
+
+// 1. Puerto Secundario: Repositorio de Persistencia
+export interface OrderRepositoryPort {
+  Save(order: Order): Result<Unit, String>;
+  FindById(id: String): Result<Order, String>;
+  FindAll(limit: Int, offset: Int): Result<[]Order, String>;
+  Update(order: Order): Result<Unit, String>;
+  Count(): Int;
+}
+
+// 2. Puerto Secundario: Pasarela de Pagos
+export interface PaymentGatewayPort {
+  Charge(orderId: String, amount: Float, currency: String, paymentToken: String): Result<String, String>;
+  Refund(paymentRef: String, amount: Float, reason: String): Result<Unit, String>;
+}
+
+// 3. Puerto Secundario: Publicador de Eventos / Message Broker
+export interface EventPublisherPort {
+  Publish(topic: String, event: DomainEvent): Result<Unit, String>;
+}
+
+// 4. Puerto Secundario: Servicio de Notificaciones (Email, SMS, Webhook)
+export interface NotificationPort {
+  SendOrderCreatedNotification(customerEmail: String, orderId: String, total: Float): Result<Unit, String>;
+  SendPaymentSuccessNotification(customerEmail: String, orderId: String, paymentRef: String): Result<Unit, String>;
+  SendOrderCancelledNotification(customerEmail: String, orderId: String, reason: String): Result<Unit, String>;
+}
+
+// 5. Puerto Secundario: Métricas y Telemetría
+export interface MetricsCollectorPort {
+  IncCounter(name: String, label: String): Unit;
+  RecordTiming(name: String, durationMs: Int): Unit;
+}

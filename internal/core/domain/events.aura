@@ -1,0 +1,27 @@
+// ==============================================================================
+// Domain Layer: Domain Events (Eventos de Dominio)
+// ==============================================================================
+
+export struct DomainEvent {
+  eventId: String,
+  eventType: String,
+  aggregateId: String,
+  payload: String,
+  timestampMs: Int
+};
+
+export fn NewDomainEvent(eventId: String, eventType: String, aggregateId: String, payload: String, timestampMs: Int): DomainEvent => {
+  return {
+    eventId: eventId,
+    eventType: eventType,
+    aggregateId: aggregateId,
+    payload: payload,
+    timestampMs: timestampMs
+  };
+};
+
+export fn EVENT_ORDER_CREATED(): String => "order.created";
+export fn EVENT_ORDER_CONFIRMED(): String => "order.confirmed";
+export fn EVENT_ORDER_PAID(): String => "order.paid";
+export fn EVENT_ORDER_CANCELLED(): String => "order.cancelled";
+export fn EVENT_ORDER_SHIPPED(): String => "order.shipped";

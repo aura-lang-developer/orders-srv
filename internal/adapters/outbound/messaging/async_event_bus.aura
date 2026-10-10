@@ -1,0 +1,44 @@
+// ==============================================================================
+// Outbound Adapter: In-Memory Asynchronous Event Bus (Estilo Golang Pub/Sub)
+// ==============================================================================
+
+import { DomainEvent } from "../../../core/domain/events";
+import { EventPublisherPort } from "../../../core/ports/outbound";
+
+export struct AsyncEventBus {
+  __aura_type: String,
+  brokerName: String,
+  mu: Mutex,
+  publishedHistory: []DomainEvent
+};
+
+export fn NewAsyncEventBus(brokerName: String): AsyncEventBus => {
+  let emptyEvents: []DomainEvent = [];
+  return {
+    __aura_type: "AsyncEventBus",
+    brokerName: brokerName,
+    mu: Mutex.new(),
+    publishedHistory: emptyEvents
+  };
+};
+
+fn (b: AsyncEventBus) Publish(topic: String, event: DomainEvent): Result<Unit, String> => {
+  b.mu.lock();
+  defer b.mu.unlock();
+
+  b.publishedHistory = append(b.publishedHistory, event);
+  println(`    📡 [EventBus @ ${b.brokerName}] Publicado evento '${event.eventType}' en topic '${topic}' (Aggregate: ${event.aggregateId})`);
+  Ok(())
+};
+
+fn (b: AsyncEventBus) GetHistory(): []DomainEvent => {
+  b.mu.lock();
+  defer b.mu.unlock();
+  b.publishedHistory
+};
+
+fn (b: AsyncEventBus) TotalEventsCount(): Int => {
+  b.mu.lock();
+  defer b.mu.unlock();
+  len(b.publishedHistory)
+};

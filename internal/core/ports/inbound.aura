@@ -1,0 +1,44 @@
+// ==============================================================================
+// Ports Layer: Inbound / Driving Ports (Interfaces de Casos de Uso)
+// ==============================================================================
+
+import { Order, OrderItem, Customer } from "../domain/order";
+
+// DTOs para solicitudes entrantes
+export struct CreateOrderItemDTO {
+  productId: String,
+  title: String,
+  quantity: Int,
+  unitPrice: Float
+};
+
+export struct CreateOrderDTO {
+  customerId: String,
+  customerName: String,
+  customerEmail: String,
+  shippingAddress: String,
+  items: []CreateOrderItemDTO,
+  currency: String
+};
+
+export struct OrderMetricsSummary {
+  totalOrders: Int,
+  pendingOrders: Int,
+  confirmedOrders: Int,
+  paidOrders: Int,
+  shippedOrders: Int,
+  cancelledOrders: Int,
+  totalRevenue: Float
+};
+
+// Puerto Primario / Conductor (Driving Port)
+export interface OrderServicePort {
+  CreateOrder(req: CreateOrderDTO): Result<Order, String>;
+  GetOrderById(id: String): Result<Order, String>;
+  ListOrders(limit: Int, offset: Int): Result<[]Order, String>;
+  ConfirmOrder(id: String): Result<Order, String>;
+  PayOrder(id: String, paymentToken: String): Result<Order, String>;
+  ShipOrder(id: String, trackingNumber: String): Result<Order, String>;
+  CancelOrder(id: String, reason: String): Result<Order, String>;
+  GetMetrics(): OrderMetricsSummary;
+}

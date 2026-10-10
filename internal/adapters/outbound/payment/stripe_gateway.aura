@@ -1,0 +1,58 @@
+// ==============================================================================
+// Outbound Adapter: Stripe Payment Gateway Adapter (Estilo Golang)
+// ==============================================================================
+
+import { PaymentGatewayPort } from "../../../core/ports/outbound";
+
+export struct StripePaymentGateway {
+  __aura_type: String,
+  apiKey: String,
+  environment: String,
+  mu: Mutex,
+  chargeCounter: Int
+};
+
+export fn NewStripePaymentGateway(apiKey: String, env: String): StripePaymentGateway => {
+  return {
+    __aura_type: "StripePaymentGateway",
+    apiKey: apiKey,
+    environment: env,
+    mu: Mutex.new(),
+    chargeCounter: 5000
+  };
+};
+
+fn (g: StripePaymentGateway) Charge(orderId: String, amount: Float, currency: String, paymentToken: String): Result<String, String> => {
+  g.mu.lock();
+  defer g.mu.unlock();
+
+  println(`    💳 [StripeGateway @ ${g.environment}] Procesando cobro para orden '${orderId}': $${amount} ${currency} (Token: ${paymentToken})`);
+
+  // Simulación de validaciones de pasarela
+  if (paymentToken == "tok_declined" || paymentToken == "tok_insufficient_funds") {
+    return Err(`Stripe Error: Tarjeta rechazada por el emisor bancario (${paymentToken})`);
+  }
+
+  if (amount <= 0.0) {
+    return Err("Stripe Error: El monto del cobro debe ser estrictamente positivo");
+  }
+
+  g.chargeCounter = g.chargeCounter + 1;
+  let chargeId = `ch_aura_${g.chargeCounter}`;
+  println(`    💳 [StripeGateway] ✓ Cargo aprobado exitosamente: ${chargeId}`);
+  Ok(chargeId)
+};
+
+fn (g: StripePaymentGateway) Refund(paymentRef: String, amount: Float, reason: String): Result<Unit, String> => {
+  g.mu.lock();
+  defer g.mu.unlock();
+
+  println(`    💳 [StripeGateway] 🔄 Procesando reembolso para cargo '${paymentRef}': $${amount} - Motivo: "${reason}"`);
+
+  if (paymentRef == "") {
+    return Err("Stripe Error: Referencia de pago no válida para reembolso");
+  }
+
+  println(`    💳 [StripeGateway] ✓ Reembolso completado (ID: re_${paymentRef})`);
+  Ok(())
+};

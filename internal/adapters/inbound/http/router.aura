@@ -1,0 +1,47 @@
+// ==============================================================================
+// Inbound Adapter: HTTP Router & Endpoint Mappings (Estilo Golang Mux)
+// ==============================================================================
+
+import { OrderHttpHandler } from "./handler";
+
+export fn RegisterRoutes(mux: Any, handler: OrderHttpHandler): Unit => {
+  // 1. Endpoints de Sistema & Salud
+  mux.get("/health", fn(req: Any, res: Any) => {
+    handler.HandleHealth(req, res);
+  });
+
+  mux.get("/metrics", fn(req: Any, res: Any) => {
+    handler.HandleMetrics(req, res);
+  });
+
+  // 2. Endpoints CRUD y Operacionales de Órdenes
+  mux.post("/api/v1/orders", fn(req: Any, res: Any) => {
+    handler.HandleCreateOrder(req, res);
+  });
+
+  mux.get("/api/v1/orders", fn(req: Any, res: Any) => {
+    handler.HandleListOrders(req, res);
+  });
+
+  mux.get("/api/v1/orders/{id}", fn(req: Any, res: Any) => {
+    handler.HandleGetOrder(req, res);
+  });
+
+  mux.post("/api/v1/orders/{id}/confirm", fn(req: Any, res: Any) => {
+    handler.HandleConfirmOrder(req, res);
+  });
+
+  mux.post("/api/v1/orders/{id}/pay", fn(req: Any, res: Any) => {
+    handler.HandlePayOrder(req, res);
+  });
+
+  mux.post("/api/v1/orders/{id}/ship", fn(req: Any, res: Any) => {
+    handler.HandleShipOrder(req, res);
+  });
+
+  mux.post("/api/v1/orders/{id}/cancel", fn(req: Any, res: Any) => {
+    handler.HandleCancelOrder(req, res);
+  });
+
+  println("[HTTP-ROUTER] ✓ Todas las rutas REST registradas en ServeMux exitosamente.");
+};

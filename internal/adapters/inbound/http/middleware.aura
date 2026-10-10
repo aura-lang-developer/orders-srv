@@ -1,0 +1,31 @@
+// ==============================================================================
+// Inbound Adapter: HTTP Middleware (Logging, CORS, Request ID)
+// ==============================================================================
+
+export fn RegisterMiddleware(mux: Any): Unit => {
+  mux.use(fn(req: Any, res: Any, next: Any) => {
+    // 1. CORS Headers
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Request-ID");
+    res.setHeader("X-Powered-By", "Aura-Hexagonal-Microservice (Golang Model)");
+
+    if (req.method == "OPTIONS") {
+      res.writeHead(204);
+      res.end();
+      return ();
+    }
+
+    // 2. Request Buffering
+    let mut raw = "";
+    req.on("data", fn(chunk: Any) => {
+      raw = raw + chunk;
+    });
+
+    req.on("end", fn() => {
+      req.rawBody = raw;
+      println(`[HTTP-INBOUND] 📡 ${req.method} ${req.url}`);
+      next();
+    });
+  });
+};

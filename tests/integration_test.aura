@@ -1,0 +1,131 @@
+// ==============================================================================
+// Integration Tests: Full Flow & Concurrency Verification (Estilo Golang)
+// ==============================================================================
+
+import {
+  Order, OrderItem, Customer, NewOrder, NewOrderItem, NewCustomer,
+  STATUS_PENDING, STATUS_CONFIRMED, STATUS_PAID, STATUS_SHIPPED, STATUS_CANCELLED
+} from "../internal/core/domain/order";
+import { CreateOrderDTO, CreateOrderItemDTO } from "../internal/core/ports/inbound";
+import { OrderService, NewOrderService } from "../internal/core/services/order_service";
+import { NewInMemoryOrderRepository } from "../internal/adapters/outbound/persistence/inmemory_repo";
+import { NewStripePaymentGateway } from "../internal/adapters/outbound/payment/stripe_gateway";
+import { NewAsyncEventBus } from "../internal/adapters/outbound/messaging/async_event_bus";
+import { NewEmailNotifier } from "../internal/adapters/outbound/notification/email_notifier";
+import { NewPrometheusMetricsAdapter } from "../internal/adapters/outbound/telemetry/prometheus_metrics";
+
+export fn main(): Unit => {
+  println("================================================================================");
+  println("  🔄 PRUEBAS DE INTEGRACIÓN END-TO-END: MICROSERVICIO HEXAGONAL EN AURA");
+  println("================================================================================");
+
+  let mut passed = 0;
+  let mut failed = 0;
+
+  // 1. Setup de Adaptadores Reales de Producción
+  let repo = NewInMemoryOrderRepository();
+  let payment = NewStripePaymentGateway("sk_live_integration_key_8833", "staging-integration");
+  let bus = NewAsyncEventBus("kafka-cluster-integration");
+  let notifier = NewEmailNotifier("orders@aura-microservice.io", "smtp.aura-microservice.io:587");
+  let metrics = NewPrometheusMetricsAdapter("microservice_orders");
+
+  let service = NewOrderService(repo, payment, bus, notifier, metrics);
+
+  // Integración 1: Creación Masiva y Validación de Paginación
+  println("\n[INTEGRATION 1] Creando lote de 5 órdenes para verificar persistencia y paginación...");
+  let mut i = 1;
+  while i <= 5 {
+    let item: CreateOrderItemDTO = {
+      productId: `sku-item-${i}`,
+      title: `Producto SKU #${i}`,
+      quantity: i,
+      unitPrice: 50.0
+    };
+    let mut items: []CreateOrderItemDTO = [];
+    items = append(items, item);
+
+    let req: CreateOrderDTO = {
+      customerId: `cust-bulk-${i}`,
+      customerName: `Cliente Batch ${i}`,
+      customerEmail: `client${i}@domain.com`,
+      shippingAddress: `Calle ${i} #100`,
+      items: items,
+      currency: "USD"
+    };
+
+    let _ = service.CreateOrder(req);
+    i = i + 1;
+  }
+
+  if (repo.Count() == 5) {
+    println(`  ✓ [PASS] 5 órdenes persistidas correctamente en el repositorio.`);
+    passed = passed + 1;
+  }else {
+    println(`  ✕ [FAIL] Se esperaban 5 órdenes pero hay ${repo.Count()}`);
+    failed = failed + 1;
+  }
+
+  // Verificar Paginación: Página 1 (limit 2, offset 0)
+  let page1Res = service.ListOrders(2, 0);
+  match page1Res {
+    Ok(p1) => {
+      if (len(p1) == 2) {
+        println(`  ✓ [PASS] Paginación (Página 1, limit 2): Retornó ${len(p1)} registros.`);
+        passed = passed + 1;
+      }else {
+        println(`  ✕ [FAIL] Paginación incorrecta: ${len(p1)}`);
+        failed = failed + 1;
+      }
+    },
+    Err(e) => {
+      println(`  ✕ [FAIL] Error al paginar: ${e}`);
+      failed = failed + 1;
+    }
+  };
+
+  // Integración 2: Verificación de Historial de Eventos en Bus
+  println("\n[INTEGRATION 2] Verificando trazabilidad y publicación de eventos en EventBus...");
+  let totalEvents = bus.TotalEventsCount();
+  if (totalEvents >= 5) {
+    println(`  ✓ [PASS] EventBus registró ${totalEvents} eventos de dominio.`);
+    passed = passed + 1;
+  }else {
+    println(`  ✕ [FAIL] Faltan eventos en EventBus: ${totalEvents}`);
+    failed = failed + 1;
+  }
+
+  // Integración 3: Verificación de Envío de Notificaciones Transaccionales
+  println("\n[INTEGRATION 3] Verificando adaptador de notificaciones por Email...");
+  let sentMails = notifier.GetSentCount();
+  if (sentMails == 5) {
+    println(`  ✓ [PASS] Se emitieron exitosamente ${sentMails} notificaciones por correo.`);
+    passed = passed + 1;
+  }else {
+    println(`  ✕ [FAIL] Conteo de emails incorrecto: ${sentMails}`);
+    failed = failed + 1;
+  }
+
+  // Integración 4: Verificación de Formato de Métricas Prometheus
+  println("\n[INTEGRATION 4] Generando salida de telemetría Prometheus...");
+  let promOutput = metrics.RenderPrometheusFormat();
+  println("--------------------------------------------------------------------------------");
+  println(promOutput);
+  println("--------------------------------------------------------------------------------");
+  if (len(promOutput) > 50) {
+    println("  ✓ [PASS] Exportador Prometheus generó métricas válidas.");
+    passed = passed + 1;
+  }else {
+    println("  ✕ [FAIL] Salida de métricas vacía");
+    failed = failed + 1;
+  }
+
+  // Resumen
+  println("\n================================================================================");
+  println(`  📊 RESULTADO PRUEBAS DE INTEGRACIÓN: ${passed} Pasadas, ${failed} Falladas`);
+  println("================================================================================");
+  if (failed == 0) {
+    println("  🎉 ¡TODAS LAS PRUEBAS DE INTEGRACIÓN COMPLETADAS EXITOSAMENTE!\n");
+  }else {
+    println("  ⚠️ ALGUNAS PRUEBAS DE INTEGRACIÓN FALLARON.\n");
+  }
+};

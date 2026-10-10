@@ -1,0 +1,265 @@
+// ==============================================================================
+// Inbound Adapter: HTTP REST API Controllers & Handlers (Estilo Golang)
+// ==============================================================================
+
+import { OrderService } from "../../../core/services/order_service";
+import { CreateOrderDTO, CreateOrderItemDTO } from "../../../core/ports/inbound";
+
+export struct OrderHttpHandler {
+  __aura_type: String,
+  service: OrderService
+};
+
+export fn NewOrderHttpHandler(svc: OrderService): OrderHttpHandler => {
+  return {
+    __aura_type: "OrderHttpHandler",
+    service: svc
+  };
+};
+
+// GET /health
+fn (h: OrderHttpHandler) HandleHealth(req: Any, res: Any): Unit => {
+  http.json(res, 200, {
+    status: "UP",
+    service: "order-billing-hexagonal-microservice",
+    architecture: "Hexagonal (Ports & Adapters)",
+    style: "Golang Idiomatic Model",
+    language: "Aura Lang Native",
+    version: "1.0.0"
+  });
+};
+
+// GET /metrics
+fn (h: OrderHttpHandler) HandleMetrics(req: Any, res: Any): Unit => {
+  let summary = h.service.GetMetrics();
+  http.json(res, 200, {
+    totalOrders: summary.totalOrders,
+    pendingOrders: summary.pendingOrders,
+    confirmedOrders: summary.confirmedOrders,
+    paidOrders: summary.paidOrders,
+    shippedOrders: summary.shippedOrders,
+    cancelledOrders: summary.cancelledOrders,
+    totalRevenue: summary.totalRevenue
+  });
+};
+
+// POST /api/v1/orders
+fn (h: OrderHttpHandler) HandleCreateOrder(req: Any, res: Any): Unit => {
+  let bodyStr = if (req.rawBody != ()) { req.rawBody } else { "{}" };
+  let payload = if (bodyStr != "" && bodyStr != "{}") {
+    JSON.parse(bodyStr)
+  }else {
+    {}
+  };
+
+  let custId = if (payload.customerId != ()) { `${payload.customerId}` } else { "cust-default" };
+  let custName = if (payload.customerName != ()) { `${payload.customerName}` } else { "Cliente Demo" };
+  let custEmail = if (payload.customerEmail != ()) { `${payload.customerEmail}` } else { "cliente@demo.com" };
+  let custAddr = if (payload.shippingAddress != ()) { `${payload.shippingAddress}` } else { "Av. Principal 123" };
+  let currency = if (payload.currency != ()) { `${payload.currency}` } else { "USD" };
+
+  let mut itemsList: []CreateOrderItemDTO = [];
+
+  if (payload.items != () && len(payload.items) > 0) {
+    for it in payload.items {
+      let pId = if (it.productId != ()) { `${it.productId}` } else { "prod-1" };
+      let title = if (it.title != ()) { `${it.title}` } else { "Producto General" };
+      let qty: Int = if (it.quantity != ()) { it.quantity } else { 1 };
+      let price: Float = if (it.unitPrice != ()) { it.unitPrice } else { 10.0 };
+
+      let itemDto: CreateOrderItemDTO = {
+        productId: pId,
+        title: title,
+        quantity: qty,
+        unitPrice: price
+      };
+      itemsList = append(itemsList, itemDto);
+    }
+  }else {
+    // Item por defecto para pruebas rápidas
+    let defaultItem: CreateOrderItemDTO = {
+      productId: "prod-100",
+      title: "Licencia de Software Aura Pro",
+      quantity: 1,
+      unitPrice: 150.0
+    };
+    itemsList = append(itemsList, defaultItem);
+  }
+
+  let reqDto: CreateOrderDTO = {
+    customerId: custId,
+    customerName: custName,
+    customerEmail: custEmail,
+    shippingAddress: custAddr,
+    items: itemsList,
+    currency: currency
+  };
+
+  let createRes = h.service.CreateOrder(reqDto);
+  match createRes {
+    Ok(order) => {
+      http.json(res, 201, {
+        success: true,
+        message: "Orden creada exitosamente",
+        data: order
+      });
+    },
+    Err(err) => {
+      http.json(res, 400, {
+        success: false,
+        error: err
+      });
+    }
+  };
+};
+
+// GET /api/v1/orders
+fn (h: OrderHttpHandler) HandleListOrders(req: Any, res: Any): Unit => {
+  let listRes = h.service.ListOrders(50, 0);
+  match listRes {
+    Ok(orders) => {
+      http.json(res, 200, {
+        success: true,
+        count: len(orders),
+        data: orders
+      });
+    },
+    Err(err) => {
+      http.json(res, 500, {
+        success: false,
+        error: err
+      });
+    }
+  };
+};
+
+// GET /api/v1/orders/{id}
+fn (h: OrderHttpHandler) HandleGetOrder(req: Any, res: Any): Unit => {
+  let orderId = http.pathValue(req, "id");
+  let queryRes = h.service.GetOrderById(orderId);
+  match queryRes {
+    Ok(order) => {
+      http.json(res, 200, {
+        success: true,
+        data: order
+      });
+    },
+    Err(err) => {
+      http.json(res, 404, {
+        success: false,
+        error: err
+      });
+    }
+  };
+};
+
+// POST /api/v1/orders/{id}/confirm
+fn (h: OrderHttpHandler) HandleConfirmOrder(req: Any, res: Any): Unit => {
+  let orderId = http.pathValue(req, "id");
+  let confRes = h.service.ConfirmOrder(orderId);
+  match confRes {
+    Ok(order) => {
+      http.json(res, 200, {
+        success: true,
+        message: `Orden ${orderId} confirmada`,
+        data: order
+      });
+    },
+    Err(err) => {
+      http.json(res, 400, {
+        success: false,
+        error: err
+      });
+    }
+  };
+};
+
+// POST /api/v1/orders/{id}/pay
+fn (h: OrderHttpHandler) HandlePayOrder(req: Any, res: Any): Unit => {
+  let orderId = http.pathValue(req, "id");
+  let bodyStr = if (req.rawBody != ()) { req.rawBody } else { "{}" };
+  let payload = if (bodyStr != "" && bodyStr != "{}") {
+    JSON.parse(bodyStr)
+  }else {
+    {}
+  };
+
+  let token = if (payload.paymentToken != ()) { `${payload.paymentToken}` } else { "tok_visa_default" };
+
+  let payRes = h.service.PayOrder(orderId, token);
+  match payRes {
+    Ok(order) => {
+      http.json(res, 200, {
+        success: true,
+        message: `Pago procesado exitosamente para orden ${orderId}`,
+        data: order
+      });
+    },
+    Err(err) => {
+      http.json(res, 402, {
+        success: false,
+        error: err
+      });
+    }
+  };
+};
+
+// POST /api/v1/orders/{id}/ship
+fn (h: OrderHttpHandler) HandleShipOrder(req: Any, res: Any): Unit => {
+  let orderId = http.pathValue(req, "id");
+  let bodyStr = if (req.rawBody != ()) { req.rawBody } else { "{}" };
+  let payload = if (bodyStr != "" && bodyStr != "{}") {
+    JSON.parse(bodyStr)
+  }else {
+    {}
+  };
+
+  let tracking = if (payload.trackingNumber != ()) { `${payload.trackingNumber}` } else { "TRK-AURA-9921" };
+
+  let shipRes = h.service.ShipOrder(orderId, tracking);
+  match shipRes {
+    Ok(order) => {
+      http.json(res, 200, {
+        success: true,
+        message: `Orden ${orderId} despachada`,
+        data: order
+      });
+    },
+    Err(err) => {
+      http.json(res, 400, {
+        success: false,
+        error: err
+      });
+    }
+  };
+};
+
+// POST /api/v1/orders/{id}/cancel
+fn (h: OrderHttpHandler) HandleCancelOrder(req: Any, res: Any): Unit => {
+  let orderId = http.pathValue(req, "id");
+  let bodyStr = if (req.rawBody != ()) { req.rawBody } else { "{}" };
+  let payload = if (bodyStr != "" && bodyStr != "{}") {
+    JSON.parse(bodyStr)
+  }else {
+    {}
+  };
+
+  let reason = if (payload.reason != ()) { `${payload.reason}` } else { "Cancelado por el usuario" };
+
+  let cancelRes = h.service.CancelOrder(orderId, reason);
+  match cancelRes {
+    Ok(order) => {
+      http.json(res, 200, {
+        success: true,
+        message: `Orden ${orderId} cancelada`,
+        data: order
+      });
+    },
+    Err(err) => {
+      http.json(res, 400, {
+        success: false,
+        error: err
+      });
+    }
+  };
+};

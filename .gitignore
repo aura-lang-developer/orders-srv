@@ -1,0 +1,13 @@
+# Binaries & Builds
+bin/
+*.tmp.mjs
+*.mjs
+
+# OS & IDE
+.DS_Store
+.vscode/
+.idea/
+
+# Aura Cache & Locks
+.aura/
+vendor/

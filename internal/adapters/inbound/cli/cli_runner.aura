@@ -1,0 +1,148 @@
+// ==============================================================================
+// Inbound Adapter: CLI & Interactive Execution Runner (Estilo Golang CLI)
+// ==============================================================================
+
+import { OrderService } from "../../../core/services/order_service";
+import { CreateOrderDTO, CreateOrderItemDTO } from "../../../core/ports/inbound";
+
+export struct CliRunner {
+  __aura_type: String,
+  service: OrderService
+};
+
+export fn NewCliRunner(svc: OrderService): CliRunner => {
+  return {
+    __aura_type: "CliRunner",
+    service: svc
+  };
+};
+
+fn (c: CliRunner) RunDemoWorkflow(): Unit => {
+  println("\n================================================================================");
+  println("  🚀 INICIANDO DEMOSTRACIÓN DE ARQUITECTURA HEXAGONAL EN AURA (ESTILO GOLANG)");
+  println("================================================================================");
+
+  // 1. Creación de Orden 1: Equipamiento de Desarrollo
+  println("\n[PASO 1] Inbound Adapter CLI invocando UseCase CreateOrder (Orden 1)...");
+  let item1_1: CreateOrderItemDTO = {
+    productId: "apple-mbp-16",
+    title: "MacBook Pro M3 Max (64GB, 2TB SSD)",
+    quantity: 1,
+    unitPrice: 3499.0
+  };
+  let item1_2: CreateOrderItemDTO = {
+    productId: "lg-ultrafine-5k",
+    title: "Monitor LG UltraFine 5K 27\"",
+    quantity: 2,
+    unitPrice: 1299.0
+  };
+
+  let mut items1: []CreateOrderItemDTO = [];
+  items1 = append(items1, item1_1);
+  items1 = append(items1, item1_2);
+
+  let req1: CreateOrderDTO = {
+    customerId: "cust-101",
+    customerName: "Ada Lovelace",
+    customerEmail: "ada@algorithm.org",
+    shippingAddress: "Babbage St 1843, London",
+    items: items1,
+    currency: "USD"
+  };
+
+  let ord1Res = c.service.CreateOrder(req1);
+  match ord1Res {
+    Err(e) => {
+      println(`  ✕ Error al crear orden 1: ${e}`);
+    },
+    Ok(ord1) => {
+      println(`  ✓ Orden 1 creada con ID: ${ord1.id} | Total: $${ord1.totalAmount} ${ord1.currency}`);
+
+      // 2. Creación de Orden 2: Accesorios de Oficina
+      println("\n[PASO 2] Inbound Adapter CLI invocando UseCase CreateOrder (Orden 2)...");
+      let item2_1: CreateOrderItemDTO = {
+        productId: "mech-kbd-ergodox",
+        title: "Teclado Ergonómico Mecánico ErgoDox EZ",
+        quantity: 1,
+        unitPrice: 350.0
+      };
+      let mut items2: []CreateOrderItemDTO = [];
+      items2 = append(items2, item2_1);
+
+      let req2: CreateOrderDTO = {
+        customerId: "cust-102",
+        customerName: "Alan Turing",
+        customerEmail: "alan@bletchley.gov.uk",
+        shippingAddress: "Bletchley Park, Hut 8, UK",
+        items: items2,
+        currency: "USD"
+      };
+
+      let ord2Res = c.service.CreateOrder(req2);
+      match ord2Res {
+        Err(e) => {
+          println(`  ✕ Error al crear orden 2: ${e}`);
+        },
+        Ok(ord2) => {
+          println(`  ✓ Orden 2 creada con ID: ${ord2.id} | Total: $${ord2.totalAmount} ${ord2.currency}`);
+
+          // 3. Confirmación, Pago y Despacho de Orden 1
+          println("\n[PASO 3] Flujo de Pago y Despacho para Orden 1...");
+          let conf1Res = c.service.ConfirmOrder(ord1.id);
+          match conf1Res {
+            Ok(_) => println(`  ✓ Orden ${ord1.id} confirmada`),
+            Err(e) => println(`  ✕ ${e}`)
+          };
+
+          let pay1Res = c.service.PayOrder(ord1.id, "tok_visa_corporate");
+          match pay1Res {
+            Ok(paidOrd) => println(`  ✓ Pago procesado! Estado actual: ${paidOrd.status} (Ref: ${paidOrd.paymentRef})`),
+            Err(e) => println(`  ✕ Fallo de pago: ${e}`)
+          };
+
+          let ship1Res = c.service.ShipOrder(ord1.id, "DHL-EXPRESS-554219");
+          match ship1Res {
+            Ok(shippedOrd) => println(`  ✓ Orden despachada! Estado final: ${shippedOrd.status}`),
+            Err(e) => println(`  ✕ Fallo en despacho: ${e}`)
+          };
+
+          // 4. Pago y posterior Cancelación con Transacción de Compensación en Orden 2
+          println("\n[PASO 4] Flujo de Cancelación y Reembolso (Compensating Transaction) para Orden 2...");
+          let _ = c.service.ConfirmOrder(ord2.id);
+          let _ = c.service.PayOrder(ord2.id, "tok_mastercard_personal");
+
+          println(`  >> Cancelando orden pagada ${ord2.id} para verificar reembolso automático...`);
+          let cancel2Res = c.service.CancelOrder(ord2.id, "Cliente solicitó cambio de dirección");
+          match cancel2Res {
+            Ok(cancelledOrd) => println(`  ✓ Orden cancelada con éxito: ${cancelledOrd.status} | Motivo: "${cancelledOrd.cancelReason}"`),
+            Err(e) => println(`  ✕ ${e}`)
+          };
+
+          // 5. Demostración de Protección de Invariantes de Dominio
+          println("\n[PASO 5] Verificación de Reglas de Negocio e Invariantes...");
+          println("  >> Intentando cancelar una orden que ya está en estado SHIPPED (Orden 1):");
+          let invalidTransitionRes = c.service.CancelOrder(ord1.id, "Intento ilegal de cancelar orden despachada");
+          match invalidTransitionRes {
+            Ok(_) => println("  ✕ Error: No debió permitirse transicionar"),
+            Err(domainErr) => println(`  ✓ Dominio rechazó la transición inválida correctamente:\n    "${domainErr}"`)
+          };
+
+          // 6. Resumen de Métricas
+          println("\n[PASO 6] Telemetría y Métricas del Microservicio:");
+          let metrics = c.service.GetMetrics();
+          println(`  - Total Órdenes Gestionadas: ${metrics.totalOrders}`);
+          println(`  - Órdenes Pendientes:        ${metrics.pendingOrders}`);
+          println(`  - Órdenes Confirmadas:       ${metrics.confirmedOrders}`);
+          println(`  - Órdenes Pagadas:           ${metrics.paidOrders}`);
+          println(`  - Órdenes Despachadas:       ${metrics.shippedOrders}`);
+          println(`  - Órdenes Canceladas:        ${metrics.cancelledOrders}`);
+          println(`  - Facturación Neta Total:    $${metrics.totalRevenue} USD`);
+
+          println("\n================================================================================");
+          println("  ✓ DEMOSTRACIÓN COMPLETADA EXITOSAMENTE");
+          println("================================================================================\n");
+        }
+      };
+    }
+  };
+};

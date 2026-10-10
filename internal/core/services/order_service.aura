@@ -1,0 +1,359 @@
+// ==============================================================================
+// Application Layer: Order Core Service (Hexagonal Port Implementation)
+// ==============================================================================
+
+import {
+  Order, OrderItem, Customer, NewOrder, NewOrderItem, NewCustomer,
+  STATUS_PENDING, STATUS_CONFIRMED, STATUS_PAID, STATUS_SHIPPED, STATUS_CANCELLED,
+  CanTransitionTo
+} from "../domain/order";
+import {
+  DomainEvent, NewDomainEvent,
+  EVENT_ORDER_CREATED, EVENT_ORDER_CONFIRMED, EVENT_ORDER_PAID,
+  EVENT_ORDER_SHIPPED, EVENT_ORDER_CANCELLED
+} from "../domain/events";
+import {
+  ErrOrderNotFound, ErrInvalidOrder, ErrInvalidStateTransition, ErrPaymentFailed
+} from "../domain/errors";
+import {
+  CreateOrderDTO, OrderMetricsSummary
+} from "../ports/inbound";
+import {
+  OrderRepositoryPort, PaymentGatewayPort, EventPublisherPort,
+  NotificationPort, MetricsCollectorPort
+} from "../ports/outbound";
+
+// 1. Estructura del Servicio Principal (Accepts Interfaces, Returns Struct)
+export struct OrderService {
+  repo: OrderRepositoryPort,
+  paymentGateway: PaymentGatewayPort,
+  eventPublisher: EventPublisherPort,
+  notifier: NotificationPort,
+  metrics: MetricsCollectorPort,
+  seqMu: Mutex,
+  sequence: Int
+};
+
+// 2. Constructor con Inyección Pura de Dependencias (Constructor DI)
+export fn NewOrderService(
+  repo: OrderRepositoryPort,
+  payment: PaymentGatewayPort,
+  publisher: EventPublisherPort,
+  notifier: NotificationPort,
+  metrics: MetricsCollectorPort
+): OrderService => {
+  return {
+    repo: repo,
+    paymentGateway: payment,
+    eventPublisher: publisher,
+    notifier: notifier,
+    metrics: metrics,
+    seqMu: Mutex.new(),
+    sequence: 1000
+  };
+};
+
+// 3. Métodos con Receiver estilo Golang
+
+// Generador thread-safe de IDs de orden
+fn (s: OrderService) nextOrderId(): String => {
+  s.seqMu.lock();
+  defer s.seqMu.unlock();
+  s.sequence = s.sequence + 1;
+  `ORD-${s.sequence}`
+};
+
+// Caso de Uso: Crear Orden
+fn (s: OrderService) CreateOrder(req: CreateOrderDTO): Result<Order, String> => {
+  s.metrics.IncCounter("usecase_create_order_invoked", "inbound");
+
+  // Validación y construcción de Customer
+  let custRes = NewCustomer(req.customerId, req.customerName, req.customerEmail, req.shippingAddress);
+  match custRes {
+    Err(e) => Err(ErrInvalidOrder(e)),
+    Ok(customer) => {
+      // Construcción y validación de Items
+      if (len(req.items) == 0) {
+        return Err(ErrInvalidOrder("La lista de items no puede estar vacía"));
+      }
+
+      let mut domainItems: []OrderItem = [];
+      let mut hasItemError = false;
+      let mut itemErrorMsg = "";
+
+      for itemDto in req.items {
+        let itemRes = NewOrderItem(itemDto.productId, itemDto.title, itemDto.quantity, itemDto.unitPrice);
+        match itemRes {
+          Ok(it) => {
+            domainItems = append(domainItems, it);
+          },
+          Err(err) => {
+            hasItemError = true;
+            itemErrorMsg = err;
+          }
+        };
+      }
+
+      if (hasItemError) {
+        return Err(ErrInvalidOrder(itemErrorMsg));
+      }
+
+      let orderId = s.nextOrderId();
+      let nowMs = 1720000000;
+
+      let orderRes = NewOrder(orderId, customer, domainItems, req.currency, nowMs);
+      match orderRes {
+        Err(e) => Err(e),
+        Ok(order) => {
+          // Persistir en el repositorio outbound
+          let saveRes = s.repo.Save(order);
+          match saveRes {
+            Err(e) => Err(e),
+            Ok(_) => {
+              // Publicar Evento de Dominio
+              let event = NewDomainEvent(
+                `evt-${order.id}-created`,
+                EVENT_ORDER_CREATED(),
+                order.id,
+                `Order created for customer ${customer.name} with total $${order.totalAmount}`,
+                nowMs
+              );
+              let _ = s.eventPublisher.Publish(EVENT_ORDER_CREATED(), event);
+
+              // Enviar notificación transaccional asíncrona
+              let _ = s.notifier.SendOrderCreatedNotification(customer.email, order.id, order.totalAmount);
+
+              // Registrar métricas
+              s.metrics.IncCounter("order_created_total", order.currency);
+
+              println(`[OrderService] ✓ Orden '${order.id}' creada exitosamente por $${order.totalAmount} ${order.currency}`);
+              Ok(order)
+            }
+          }
+        }
+      }
+    }
+  }
+};
+
+// Caso de Uso: Obtener Orden por ID
+fn (s: OrderService) GetOrderById(id: String): Result<Order, String> => {
+  s.metrics.IncCounter("usecase_get_order_invoked", "inbound");
+  s.repo.FindById(id)
+};
+
+// Caso de Uso: Listar Órdenes (Paginación)
+fn (s: OrderService) ListOrders(limit: Int, offset: Int): Result<[]Order, String> => {
+  s.metrics.IncCounter("usecase_list_orders_invoked", "inbound");
+  s.repo.FindAll(limit, offset)
+};
+
+// Caso de Uso: Confirmar Orden
+fn (s: OrderService) ConfirmOrder(id: String): Result<Order, String> => {
+  let existingRes = s.repo.FindById(id);
+  match existingRes {
+    Err(e) => Err(e),
+    Ok(origOrder) => {
+      if (!CanTransitionTo(origOrder.status, STATUS_CONFIRMED())) {
+        return Err(ErrInvalidStateTransition(origOrder.status, STATUS_CONFIRMED()));
+      }
+
+      let mut order = origOrder;
+      order.status = STATUS_CONFIRMED();
+      order.updatedAtMs = 1720000100;
+
+      let updateRes = s.repo.Update(order);
+      match updateRes {
+        Err(e) => Err(e),
+        Ok(_) => {
+          let event = NewDomainEvent(
+            `evt-${order.id}-confirmed`,
+            EVENT_ORDER_CONFIRMED(),
+            order.id,
+            `Order confirmed for customer ${order.customer.name}`,
+            1720000100
+          );
+          let _ = s.eventPublisher.Publish(EVENT_ORDER_CONFIRMED(), event);
+          s.metrics.IncCounter("order_confirmed_total", order.status);
+
+          println(`[OrderService] ✓ Orden '${order.id}' confirmada.`);
+          Ok(order)
+        }
+      }
+    }
+  }
+};
+
+// Caso de Uso: Pagar Orden (Integración con Pasarela de Pagos)
+fn (s: OrderService) PayOrder(id: String, paymentToken: String): Result<Order, String> => {
+  let existingRes = s.repo.FindById(id);
+  match existingRes {
+    Err(e) => Err(e),
+    Ok(origOrder) => {
+      if (!CanTransitionTo(origOrder.status, STATUS_PAID())) {
+        return Err(ErrInvalidStateTransition(origOrder.status, STATUS_PAID()));
+      }
+
+      // Invocar puerto outbound de Pagos
+      let chargeRes = s.paymentGateway.Charge(origOrder.id, origOrder.totalAmount, origOrder.currency, paymentToken);
+      match chargeRes {
+        Err(err) => {
+          s.metrics.IncCounter("order_payment_failed", "gateway");
+          Err(ErrPaymentFailed(err))
+        },
+        Ok(paymentRef) => {
+          let mut order = origOrder;
+          order.status = STATUS_PAID();
+          order.paymentRef = paymentRef;
+          order.updatedAtMs = 1720000200;
+
+          let updateRes = s.repo.Update(order);
+          match updateRes {
+            Err(e) => Err(e),
+            Ok(_) => {
+              let event = NewDomainEvent(
+                `evt-${order.id}-paid`,
+                EVENT_ORDER_PAID(),
+                order.id,
+                `Payment received: ${paymentRef}`,
+                1720000200
+              );
+              let _ = s.eventPublisher.Publish(EVENT_ORDER_PAID(), event);
+              let _ = s.notifier.SendPaymentSuccessNotification(order.customer.email, order.id, paymentRef);
+              s.metrics.IncCounter("order_paid_total", "success");
+
+              println(`[OrderService] 💳 Orden '${order.id}' pagada con éxito (Ref: ${paymentRef})`);
+              Ok(order)
+            }
+          }
+        }
+      }
+    }
+  }
+};
+
+// Caso de Uso: Enviar Orden (Logística)
+fn (s: OrderService) ShipOrder(id: String, trackingNumber: String): Result<Order, String> => {
+  let existingRes = s.repo.FindById(id);
+  match existingRes {
+    Err(e) => Err(e),
+    Ok(origOrder) => {
+      if (!CanTransitionTo(origOrder.status, STATUS_SHIPPED())) {
+        return Err(ErrInvalidStateTransition(origOrder.status, STATUS_SHIPPED()));
+      }
+
+      let mut order = origOrder;
+      order.status = STATUS_SHIPPED();
+      order.updatedAtMs = 1720000300;
+
+      let updateRes = s.repo.Update(order);
+      match updateRes {
+        Err(e) => Err(e),
+        Ok(_) => {
+          let event = NewDomainEvent(
+            `evt-${order.id}-shipped`,
+            EVENT_ORDER_SHIPPED(),
+            order.id,
+            `Tracking: ${trackingNumber}`,
+            1720000300
+          );
+          let _ = s.eventPublisher.Publish(EVENT_ORDER_SHIPPED(), event);
+          s.metrics.IncCounter("order_shipped_total", "logistics");
+
+          println(`[OrderService] 🚚 Orden '${order.id}' despachada (Tracking: ${trackingNumber})`);
+          Ok(order)
+        }
+      }
+    }
+  }
+};
+
+// Caso de Uso: Cancelar Orden (con Compensación / Reembolso si aplica)
+fn (s: OrderService) CancelOrder(id: String, reason: String): Result<Order, String> => {
+  let existingRes = s.repo.FindById(id);
+  match existingRes {
+    Err(e) => Err(e),
+    Ok(origOrder) => {
+      if (!CanTransitionTo(origOrder.status, STATUS_CANCELLED())) {
+        return Err(ErrInvalidStateTransition(origOrder.status, STATUS_CANCELLED()));
+      }
+
+      // Transacción de Compensación: Reembolso si ya estaba pagada
+      if (origOrder.status == STATUS_PAID() && origOrder.paymentRef != "") {
+        println(`[OrderService] 🔄 Iniciando transacción de compensación / reembolso para orden ${origOrder.id}...`);
+        let refundRes = s.paymentGateway.Refund(origOrder.paymentRef, origOrder.totalAmount, reason);
+        match refundRes {
+          Ok(_) => println(`[OrderService] ✓ Reembolso completado para pago ${origOrder.paymentRef}`),
+          Err(err) => println(`[OrderService] ⚠️ Advertencia en reembolso: ${err}`)
+        };
+      }
+
+      let mut order = origOrder;
+      order.status = STATUS_CANCELLED();
+      order.cancelReason = reason;
+      order.updatedAtMs = 1720000400;
+
+      let updateRes = s.repo.Update(order);
+      match updateRes {
+        Err(e) => Err(e),
+        Ok(_) => {
+          let event = NewDomainEvent(
+            `evt-${order.id}-cancelled`,
+            EVENT_ORDER_CANCELLED(),
+            order.id,
+            `Cancelled reason: ${reason}`,
+            1720000400
+          );
+          let _ = s.eventPublisher.Publish(EVENT_ORDER_CANCELLED(), event);
+          let _ = s.notifier.SendOrderCancelledNotification(order.customer.email, order.id, reason);
+          s.metrics.IncCounter("order_cancelled_total", "refund");
+
+          println(`[OrderService] 🛑 Orden '${order.id}' cancelada.`);
+          Ok(order)
+        }
+      }
+    }
+  }
+};
+
+// Caso de Uso: Resumen de Métricas
+fn (s: OrderService) GetMetrics(): OrderMetricsSummary => {
+  let allRes = s.repo.FindAll(1000, 0);
+  let orders = match allRes {
+    Ok(list) => list,
+    Err(_) => []
+  };
+
+  let mut pending = 0;
+  let mut confirmed = 0;
+  let mut paid = 0;
+  let mut shipped = 0;
+  let mut cancelled = 0;
+  let mut revenue: Float = 0.0;
+
+  for o in orders {
+    if (o.status == STATUS_PENDING()) {
+      pending = pending + 1;
+    }else if (o.status == STATUS_CONFIRMED()) {
+      confirmed = confirmed + 1;
+    }else if (o.status == STATUS_PAID()) {
+      paid = paid + 1;
+      revenue = revenue + o.totalAmount;
+    }else if (o.status == STATUS_SHIPPED()) {
+      shipped = shipped + 1;
+      revenue = revenue + o.totalAmount;
+    }else if (o.status == STATUS_CANCELLED()) {
+      cancelled = cancelled + 1;
+    }
+  }
+
+  return {
+    totalOrders: len(orders),
+    pendingOrders: pending,
+    confirmedOrders: confirmed,
+    paidOrders: paid,
+    shippedOrders: shipped,
+    cancelledOrders: cancelled,
+    totalRevenue: revenue
+  };
+};

@@ -1,0 +1,49 @@
+// ==============================================================================
+// Domain Layer: Core Business Errors (Estilo Golang)
+// ==============================================================================
+
+export struct DomainError {
+  code: String,
+  message: String,
+  details: String
+};
+
+export fn NewDomainError(code: String, message: String, details: String): DomainError => {
+  return {
+    code: code,
+    message: message,
+    details: details
+  };
+};
+
+export fn (e: DomainError) Error(): String => {
+  if (e.details != "") {
+    return `[${e.code}] ${e.message} - ${e.details}`;
+  }
+  `[${e.code}] ${e.message}`
+};
+
+// Constructores estándar de errores de dominio comunes
+export fn ErrOrderNotFound(id: String): String => {
+  `ORDER_NOT_FOUND: Orden con ID '${id}' no existe en el sistema`
+};
+
+export fn ErrInvalidOrder(reason: String): String => {
+  `INVALID_ORDER: Datos de orden inválidos: ${reason}`
+};
+
+export fn ErrInvalidStateTransition(fromState: String, toState: String): String => {
+  `INVALID_STATE_TRANSITION: No se puede transicionar orden de estado '${fromState}' a '${toState}'`
+};
+
+export fn ErrPaymentFailed(reason: String): String => {
+  `PAYMENT_FAILED: Error en pasarela de pagos: ${reason}`
+};
+
+export fn ErrDuplicateOrder(id: String): String => {
+  `DUPLICATE_ORDER: Ya existe una orden registrada con ID '${id}'`
+};
+
+export fn ErrEmptyOrderItems(): String => {
+  "EMPTY_ITEMS: La orden debe contener al menos un item válido"
+};

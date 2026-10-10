@@ -1,0 +1,257 @@
+// ==============================================================================
+// Unit Tests: Pure Unit Testing with Mocks (Estilo Idiomático Golang)
+// ==============================================================================
+
+import {
+  Order, OrderItem, Customer, NewOrder, NewOrderItem, NewCustomer,
+  STATUS_PENDING, STATUS_CONFIRMED, STATUS_PAID, STATUS_SHIPPED, STATUS_CANCELLED
+} from "../internal/core/domain/order";
+import { DomainEvent } from "../internal/core/domain/events";
+import { CreateOrderDTO, CreateOrderItemDTO } from "../internal/core/ports/inbound";
+import {
+  OrderRepositoryPort, PaymentGatewayPort, EventPublisherPort,
+  NotificationPort, MetricsCollectorPort
+} from "../internal/core/ports/outbound";
+import { OrderService, NewOrderService } from "../internal/core/services/order_service";
+import { NewInMemoryOrderRepository } from "../internal/adapters/outbound/persistence/inmemory_repo";
+import { NewStripePaymentGateway } from "../internal/adapters/outbound/payment/stripe_gateway";
+import { NewAsyncEventBus } from "../internal/adapters/outbound/messaging/async_event_bus";
+import { NewEmailNotifier } from "../internal/adapters/outbound/notification/email_notifier";
+import { NewPrometheusMetricsAdapter } from "../internal/adapters/outbound/telemetry/prometheus_metrics";
+
+// Mock Repositorio para Pruebas Unitarias
+export struct MockOrderRepo {
+  __aura_type: String,
+  mu: Mutex,
+  mockStore: []Order,
+  saveCallCount: Int
+};
+
+export fn NewMockOrderRepo(): MockOrderRepo => {
+  let empty: []Order = [];
+  return {
+    __aura_type: "MockOrderRepo",
+    mu: Mutex.new(),
+    mockStore: empty,
+    saveCallCount: 0
+  };
+};
+
+fn (m: MockOrderRepo) Save(order: Order): Result<Unit, String> => {
+  m.mu.lock();
+  defer m.mu.unlock();
+  m.mockStore = append(m.mockStore, order);
+  m.saveCallCount = m.saveCallCount + 1;
+  Ok(())
+};
+
+fn (m: MockOrderRepo) FindById(id: String): Result<Order, String> => {
+  m.mu.lock();
+  defer m.mu.unlock();
+  for o in m.mockStore {
+    if (o.id == id) {
+      return Ok(o);
+    }
+  }
+  Err(`Mock: Order ${id} not found`)
+};
+
+fn (m: MockOrderRepo) FindAll(limit: Int, offset: Int): Result<[]Order, String> => {
+  m.mu.lock();
+  defer m.mu.unlock();
+  Ok(m.mockStore)
+};
+
+fn (m: MockOrderRepo) Update(order: Order): Result<Unit, String> => {
+  m.mu.lock();
+  defer m.mu.unlock();
+  let mut updated: []Order = [];
+  for o in m.mockStore {
+    if (o.id == order.id) {
+      updated = append(updated, order);
+    }else {
+      updated = append(updated, o);
+    }
+  }
+  m.mockStore = updated;
+  Ok(())
+};
+
+fn (m: MockOrderRepo) Count(): Int => {
+  m.mu.lock();
+  defer m.mu.unlock();
+  len(m.mockStore)
+};
+
+// Suite de Pruebas Unitarias
+export fn main(): Unit => {
+  println("================================================================================");
+  println("  🧪 SUITE DE PRUEBAS UNITARIAS: MICROSERVICIO HEXAGONAL EN AURA");
+  println("================================================================================");
+
+  let mut testsPassed = 0;
+  let mut testsFailed = 0;
+
+  // Setup Test Fixtures
+  let repo = NewMockOrderRepo();
+  let payment = NewStripePaymentGateway("sk_test_mock_123", "unit-test");
+  let bus = NewAsyncEventBus("test-event-bus");
+  let notifier = NewEmailNotifier("noreply@test.local", "smtp.test.local:25");
+  let metrics = NewPrometheusMetricsAdapter("test_metrics");
+
+  let service = NewOrderService(repo, payment, bus, notifier, metrics);
+
+  // Test 1: Crear orden exitosamente
+  println("\n[TEST 1] Verificando creación exitosa de orden y cálculo de subtotal...");
+  let it1: CreateOrderItemDTO = {
+    productId: "book-tdd",
+    title: "Test Driven Development by Example",
+    quantity: 2,
+    unitPrice: 35.0
+  };
+  let mut items1: []CreateOrderItemDTO = [];
+  items1 = append(items1, it1);
+
+  let req1: CreateOrderDTO = {
+    customerId: "cust-test-1",
+    customerName: "Kent Beck",
+    customerEmail: "kent@testing.org",
+    shippingAddress: "Red Green Refactor St 1",
+    items: items1,
+    currency: "USD"
+  };
+
+  let res1 = service.CreateOrder(req1);
+  match res1 {
+    Ok(ord) => {
+      if (ord.totalAmount == 70.0 && ord.status == STATUS_PENDING() && repo.Count() == 1) {
+        println(`  ✓ [PASS] Orden '${ord.id}' creada con total correcto: $${ord.totalAmount}`);
+        testsPassed = testsPassed + 1;
+      }else {
+        println("  ✕ [FAIL] Datos de orden no coinciden con lo esperado");
+        testsFailed = testsFailed + 1;
+      }
+    },
+    Err(e) => {
+      println(`  ✕ [FAIL] Creación falló inesperadamente: ${e}`);
+      testsFailed = testsFailed + 1;
+    }
+  };
+
+  // Test 2: Validación de orden con items vacíos
+  println("\n[TEST 2] Verificando rechazo de orden sin items...");
+  let emptyItems: []CreateOrderItemDTO = [];
+  let reqEmpty: CreateOrderDTO = {
+    customerId: "cust-test-2",
+    customerName: "Martin Fowler",
+    customerEmail: "martin@refactoring.com",
+    shippingAddress: "Patterns St 2",
+    items: emptyItems,
+    currency: "USD"
+  };
+
+  let resEmpty = service.CreateOrder(reqEmpty);
+  match resEmpty {
+    Ok(_) => {
+      println("  ✕ [FAIL] La orden debió ser rechazada por lista de items vacía");
+      testsFailed = testsFailed + 1;
+    },
+    Err(e) => {
+      println(`  ✓ [PASS] Validación interceptó error esperado: "${e}"`);
+      testsPassed = testsPassed + 1;
+    }
+  };
+
+  // Test 3: Transición de Estados Completa (Pending -> Confirmed -> Paid -> Shipped)
+  println("\n[TEST 3] Verificando ciclo de vida completo de estados...");
+  let mut createdOrderId = "";
+  match res1 {
+    Ok(ord) => { createdOrderId = ord.id; },
+    Err(_) => ()
+  };
+
+  let confRes = service.ConfirmOrder(createdOrderId);
+  let payRes = service.PayOrder(createdOrderId, "tok_visa");
+  let shipRes = service.ShipOrder(createdOrderId, "TRK-FEDEX-8811");
+
+  match shipRes {
+    Ok(finalOrd) => {
+      if (finalOrd.status == STATUS_SHIPPED() && finalOrd.paymentRef != "") {
+        println(`  ✓ [PASS] Ciclo de vida completado con éxito. Estado final: ${finalOrd.status}`);
+        testsPassed = testsPassed + 1;
+      }else {
+        println("  ✕ [FAIL] Estado final incorrecto");
+        testsFailed = testsFailed + 1;
+      }
+    },
+    Err(e) => {
+      println(`  ✕ [FAIL] Error en transición: ${e}`);
+      testsFailed = testsFailed + 1;
+    }
+  };
+
+  // Test 4: Rechazo de transición ilegal (Intentar cancelar orden enviada)
+  println("\n[TEST 4] Verificando protección contra transición inválida (SHIPPED -> CANCELLED)...");
+  let illegalCancel = service.CancelOrder(createdOrderId, "Intento de cancelar orden enviada");
+  match illegalCancel {
+    Ok(_) => {
+      println("  ✕ [FAIL] El dominio permitió una transición inválida");
+      testsFailed = testsFailed + 1;
+    },
+    Err(e) => {
+      println(`  ✓ [PASS] Dominio protegió la invariante correctamente: "${e}"`);
+      testsPassed = testsPassed + 1;
+    }
+  };
+
+  // Test 5: Rechazo de pago con tarjeta declinada
+  println("\n[TEST 5] Verificando manejo de fallos en pasarela de pago...");
+  let it5: CreateOrderItemDTO = {
+    productId: "service-tier-1",
+    title: "Cloud Hosting Monthly",
+    quantity: 1,
+    unitPrice: 199.0
+  };
+  let mut items5: []CreateOrderItemDTO = [];
+  items5 = append(items5, it5);
+  let req5: CreateOrderDTO = {
+    customerId: "cust-test-5",
+    customerName: "Rob Pike",
+    customerEmail: "rob@golang.org",
+    shippingAddress: "Go Way 1",
+    items: items5,
+    currency: "USD"
+  };
+
+  let ord5Res = service.CreateOrder(req5);
+  match ord5Res {
+    Ok(ord5) => {
+      let _ = service.ConfirmOrder(ord5.id);
+      let failedPayRes = service.PayOrder(ord5.id, "tok_declined");
+      match failedPayRes {
+        Ok(_) => {
+          println("  ✕ [FAIL] El pago con token declinado debió fallar");
+          testsFailed = testsFailed + 1;
+        },
+        Err(e) => {
+          println(`  ✓ [PASS] Pasarela y servicio capturaron fallo de pago: "${e}"`);
+          testsPassed = testsPassed + 1;
+        }
+      };
+    },
+    Err(e) => {
+      println(`  ✕ [FAIL] Error al crear orden 5: ${e}`);
+      testsFailed = testsFailed + 1;
+    }
+  };
+
+  // Resumen Final de Pruebas
+  println("\n--------------------------------------------------------------------------------");
+  println(`  📊 RESULTADO DE LA SUITE: ${testsPassed} Pasadas, ${testsFailed} Falladas`);
+  println("--------------------------------------------------------------------------------");
+  if (testsFailed == 0) {
+    println("  🎉 ¡TODAS LAS PRUEBAS UNITARIAS PASARON EXITOSAMENTE!\n");
+  }else {
+    println("  ⚠️ ALGUNAS PRUEBAS FALLARON.\n");
+  }
+};

@@ -1,0 +1,107 @@
+// ==============================================================================
+// Outbound Adapter: Concurrency-Safe In-Memory Repository (Estilo Golang)
+// ==============================================================================
+
+import { Order, OrderItem, Customer, NewOrder, NewOrderItem, NewCustomer, STATUS_PENDING } from "../../../core/domain/order";
+import { ErrOrderNotFound, ErrDuplicateOrder } from "../../../core/domain/errors";
+import { OrderRepositoryPort } from "../../../core/ports/outbound";
+
+export struct InMemoryOrderRepository {
+  __aura_type: String,
+  mu: Mutex,
+  store: []Order
+};
+
+export fn NewInMemoryOrderRepository(): InMemoryOrderRepository => {
+  let emptyList: []Order = [];
+  return {
+    __aura_type: "InMemoryOrderRepository",
+    mu: Mutex.new(),
+    store: emptyList
+  };
+};
+
+// Guardar nueva orden (falla si ya existe)
+fn (r: InMemoryOrderRepository) Save(order: Order): Result<Unit, String> => {
+  r.mu.lock();
+  defer r.mu.unlock();
+
+  for existing in r.store {
+    if (existing.id == order.id) {
+      return Err(ErrDuplicateOrder(order.id));
+    }
+  }
+
+  r.store = append(r.store, order);
+  println(`    💾 [Repo:InMemory] Guardada orden '${order.id}' para ${order.customer.name}`);
+  Ok(())
+};
+
+// Buscar orden por ID
+fn (r: InMemoryOrderRepository) FindById(id: String): Result<Order, String> => {
+  r.mu.lock();
+  defer r.mu.unlock();
+
+  for o in r.store {
+    if (o.id == id) {
+      return Ok(o);
+    }
+  }
+  Err(ErrOrderNotFound(id))
+};
+
+// Listar órdenes con paginación
+fn (r: InMemoryOrderRepository) FindAll(limit: Int, offset: Int): Result<[]Order, String> => {
+  r.mu.lock();
+  defer r.mu.unlock();
+
+  let total = len(r.store);
+  if (offset >= total) {
+    let empty: []Order = [];
+    return Ok(empty);
+  }
+
+  let mut result: []Order = [];
+  let mut i = offset;
+  let maxIndex = if (offset + limit < total) { offset + limit } else { total };
+
+  while i < maxIndex {
+    result = append(result, r.store[i]);
+    i = i + 1;
+  }
+
+  Ok(result)
+};
+
+// Actualizar orden existente
+fn (r: InMemoryOrderRepository) Update(order: Order): Result<Unit, String> => {
+  r.mu.lock();
+  defer r.mu.unlock();
+
+  let mut found = false;
+  let mut updatedStore: []Order = [];
+
+  for existing in r.store {
+    if (existing.id == order.id) {
+      updatedStore = append(updatedStore, order);
+      found = true;
+    }else {
+      updatedStore = append(updatedStore, existing);
+    }
+  }
+
+  if (!found) {
+    return Err(ErrOrderNotFound(order.id));
+  }
+
+  r.store = updatedStore;
+  println(`    💾 [Repo:InMemory] Actualizado estado de orden '${order.id}' -> ${order.status}`);
+  Ok(())
+};
+
+// Contar total de registros
+fn (r: InMemoryOrderRepository) Count(): Int => {
+  r.mu.lock();
+  defer r.mu.unlock();
+  len(r.store)
+};

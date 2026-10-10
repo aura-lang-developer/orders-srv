@@ -1,0 +1,77 @@
+// ==============================================================================
+// Outbound Adapter: Prometheus Telemetry & Metrics Adapter (Estilo Golang)
+// ==============================================================================
+
+import { MetricsCollectorPort } from "../../../core/ports/outbound";
+
+export struct MetricCounterItem {
+  name: String,
+  label: String,
+  count: Int
+};
+
+export struct PrometheusMetricsAdapter {
+  __aura_type: String,
+  namespace: String,
+  mu: Mutex,
+  counters: []MetricCounterItem
+};
+
+export fn NewPrometheusMetricsAdapter(namespace: String): PrometheusMetricsAdapter => {
+  let emptyItems: []MetricCounterItem = [];
+  return {
+    __aura_type: "PrometheusMetricsAdapter",
+    namespace: namespace,
+    mu: Mutex.new(),
+    counters: emptyItems
+  };
+};
+
+fn (m: PrometheusMetricsAdapter) IncCounter(name: String, label: String): Unit => {
+  m.mu.lock();
+  defer m.mu.unlock();
+
+  let mut found = false;
+  let mut updated: []MetricCounterItem = [];
+
+  for it in m.counters {
+    if (it.name == name && it.label == label) {
+      let nextItem: MetricCounterItem = {
+        name: it.name,
+        label: it.label,
+        count: it.count + 1
+      };
+      updated = append(updated, nextItem);
+      found = true;
+    }else {
+      updated = append(updated, it);
+    }
+  }
+
+  if (!found) {
+    let newItem: MetricCounterItem = {
+      name: name,
+      label: label,
+      count: 1
+    };
+    updated = append(updated, newItem);
+  }
+
+  m.counters = updated;
+  println(`    📈 [Metrics @ ${m.namespace}] Incrementado '${name}{label="${label}"}'`);
+};
+
+fn (m: PrometheusMetricsAdapter) RecordTiming(name: String, durationMs: Int): Unit => {
+  println(`    ⏱️ [Metrics @ ${m.namespace}] Timing '${name}': ${durationMs}ms`);
+};
+
+fn (m: PrometheusMetricsAdapter) RenderPrometheusFormat(): String => {
+  m.mu.lock();
+  defer m.mu.unlock();
+
+  let mut out = `# HELP order_microservice_metrics Exposición de métricas de telemetría Aura\n# TYPE order_microservice_metrics counter\n`;
+  for c in m.counters {
+    out = out + `${m.namespace}_${c.name}{tag="${c.label}"} ${c.count}\n`;
+  }
+  out
+};
