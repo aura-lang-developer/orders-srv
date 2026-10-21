@@ -11,3 +11,5 @@ bin/
 # Aura Cache & Locks
 .aura/
 vendor/
+*.tmp
+*.tmp.mjs.map

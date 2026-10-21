@@ -4,7 +4,7 @@
 
 .PHONY: all build run test test-integration check fmt clean help
 
-AURA_BIN := /Users/mauriciorojas/.cargo/bin/aurac
+AURA_BIN ?= $(shell which aurac 2>/dev/null || echo aurac)
 SERVER_ENTRY := cmd/server/main.aura
 UNIT_TESTS := tests/order_service_test.aura
 INT_TESTS := tests/integration_test.aura
