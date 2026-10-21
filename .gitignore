@@ -2,6 +2,7 @@
 bin/
 *.tmp.mjs
 *.mjs
+*.tmp.mjs.map
 
 # OS & IDE
 .DS_Store
@@ -11,5 +12,3 @@ bin/
 # Aura Cache & Locks
 .aura/
 vendor/
-*.tmp
-*.tmp.mjs.map
